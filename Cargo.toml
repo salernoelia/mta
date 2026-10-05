@@ -1,0 +1,61 @@
+[package]
+name = "mta"
+version = "0.1.0"
+edition = "2021"
+authors = ["Elia Salerno"]
+description = "Fast, robust, cross-platform metadata reader for any file format with CSV export"
+license = "MIT"
+repository = "https://github.com/salernoelia/mta"
+keywords = ["metadata", "exif", "file-inspector", "egui", "csv"]
+categories = ["command-line-utilities", "filesystem", "gui"]
+
+[[bin]]
+name = "mta"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.31", default-features = true }
+egui = "0.31"
+rfd = "0.15"
+arboard = "3.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+csv = "1.3"
+dirs = "5.0"
+chrono = { version = "0.4", default-features = true }
+tempfile = "3"
+self-replace = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "tiff", "bmp", "ico"] }
+kamadak-exif = "0.6"
+lopdf = "0.35"
+lofty = "0.22"
+goblin = "0.9"
+infer = "0.19"
+sha2 = "0.10"
+sha1 = "0.10"
+md5 = "0.7"
+
+[profile.release]
+debug = false
+strip = "symbols"
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[package.metadata.deb]
+maintainer = "Elia Salerno"
+section = "utility"
+priority = "optional"
+assets = [
+	["target/release/mta", "usr/bin/mta", "755"],
+	["icon.png", "usr/share/icons/hicolor/512x512/apps/mta.png", "644"],
+	["packaging/mta.desktop", "usr/share/applications/mta.desktop", "644"],
+	["README.md", "usr/share/doc/mta/README.md", "644"],
+	["LICENSE", "usr/share/doc/mta/LICENSE", "644"],
+]
+depends = "libx11-6, libxi6, libxcursor1, libxrandr2, libxkbcommon0, libwayland-client0, libgl1"

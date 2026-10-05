@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Mta
+Comment=Universal Metadata Reader & Inspector
+Exec=mta %F
+Icon=mta
+Terminal=false
+Type=Application
+Categories=Utility;System;Development;
+MimeType=image/*;audio/*;video/*;application/pdf;application/zip;text/*;
