@@ -334,13 +334,17 @@ impl MtaApp {
             ui.add_space(6.0);
 
             // Filter & Search bar
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Filter:");
-                let text_edit = ui.text_edit_singleline(&mut self.filter_query);
+                let text_edit = ui.add(
+                    egui::TextEdit::singleline(&mut self.filter_query)
+                        .hint_text("Search properties...")
+                        .desired_width(160.0),
+                );
                 if text_edit.changed() {
                     // Filter dynamically
                 }
-                if !self.filter_query.is_empty() && ui.button("✕").clicked() {
+                if !self.filter_query.is_empty() && ui.small_button("✕").clicked() {
                     self.filter_query.clear();
                 }
 
@@ -364,10 +368,12 @@ impl MtaApp {
 
             // Metadata Table
             let filter = self.filter_query.to_lowercase();
-            egui::ScrollArea::both()
+            egui::ScrollArea::vertical()
                 .id_salt("metadata_table_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    let full_width = ui.available_width();
+
                     for section in &report.sections {
                         if let Some(ref cat) = self.selected_category {
                             if &section.name != cat {
@@ -390,7 +396,7 @@ impl MtaApp {
                             continue;
                         }
 
-                        ui.add_space(8.0);
+                        ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(&section.name).strong().heading());
                             ui.label(
@@ -401,43 +407,78 @@ impl MtaApp {
                         });
                         ui.separator();
 
-                        egui::Grid::new(format!("grid_{}", section.name))
-                            .striped(true)
-                            .num_columns(3)
-                            .spacing([24.0, 8.0])
-                            .min_col_width(120.0)
-                            .show(ui, |ui| {
-                                for entry in matching_entries {
-                                    // Key
-                                    ui.label(egui::RichText::new(&entry.key).strong());
+                        let key_col_w = (full_width * 0.28).clamp(130.0, 220.0);
+                        let action_col_w = 32.0;
+                        let val_col_w = (full_width - key_col_w - action_col_w - 32.0).max(100.0);
 
-                                    // Value
-                                    let is_link = entry.value.starts_with("http://")
-                                        || entry.value.starts_with("https://");
+                        for (idx, entry) in matching_entries.iter().enumerate() {
+                            let row_bg = if idx % 2 == 0 {
+                                ui.visuals().faint_bg_color
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            };
 
-                                    if is_link {
-                                        ui.hyperlink(&entry.value);
-                                    } else {
-                                        ui.add(egui::Label::new(&entry.value).wrap());
-                                    }
+                            egui::Frame::NONE
+                                .fill(row_bg)
+                                .inner_margin(egui::Margin::symmetric(6, 4))
+                                .corner_radius(4.0)
+                                .show(ui, |ui| {
+                                    ui.set_width(full_width - 12.0);
+                                    ui.horizontal(|ui| {
+                                        // Column 1: Key
+                                        ui.allocate_ui_with_layout(
+                                            egui::vec2(key_col_w, 0.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        egui::RichText::new(&entry.key).strong(),
+                                                    )
+                                                    .wrap(),
+                                                );
+                                            },
+                                        );
 
-                                    // Copy button
-                                    if ui
-                                        .small_button("📋")
-                                        .on_hover_text("Copy value to clipboard")
-                                        .clicked()
-                                    {
-                                        if exporter::copy_to_clipboard(&entry.value).is_ok() {
-                                            self.status_line = format!("Copied '{}' to clipboard", entry.key);
-                                        }
-                                    }
+                                        // Column 2: Value
+                                        ui.allocate_ui_with_layout(
+                                            egui::vec2(val_col_w, 0.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                let is_link = entry.value.starts_with("http://")
+                                                    || entry.value.starts_with("https://");
 
-                                    ui.end_row();
-                                }
-                            });
+                                                if is_link {
+                                                    ui.hyperlink(&entry.value);
+                                                } else {
+                                                    ui.add(egui::Label::new(&entry.value).wrap());
+                                                }
+                                            },
+                                        );
+
+                                        // Column 3: Copy Action Button
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .small_button("📋")
+                                                    .on_hover_text("Copy value to clipboard")
+                                                    .clicked()
+                                                {
+                                                    if exporter::copy_to_clipboard(&entry.value).is_ok() {
+                                                        self.status_line = format!(
+                                                            "Copied '{}' to clipboard",
+                                                            entry.key
+                                                        );
+                                                    }
+                                                }
+                                            },
+                                        );
+                                    });
+                                });
+                        }
                     }
 
-                    // Ample bottom space so horizontal scrollbar never overlaps bottom-most row
+                    // Ample bottom space so bottom-most item is never obscured
                     ui.add_space(36.0);
                 });
         } else {
@@ -656,7 +697,7 @@ impl MtaApp {
                                     if ui.small_button("Inspect").clicked() {
                                         file_to_load = Some(PathBuf::from(&rec.path));
                                     }
-                                    if ui.small_button("✕").clicked() {
+                                    if ui.small_button("🗑").on_hover_text("Remove from history").clicked() {
                                         file_to_remove = Some(rec.path.clone());
                                     }
                                 });
