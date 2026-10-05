@@ -134,3 +134,33 @@ fn sanitize_filename(name: &str) -> String {
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::model::MetadataSection;
+
+    #[test]
+    fn test_batch_csv_generation() {
+        let mut r1 = FileMetadataReport::new(Path::new("photo1.jpg"));
+        r1.file_size_formatted = "2.1 MB".to_string();
+        r1.file_type_label = "JPEG".to_string();
+        let mut s1 = MetadataSection::new("Camera");
+        s1.add("Model", "Alpha 7");
+        r1.sections.push(s1);
+
+        let mut r2 = FileMetadataReport::new(Path::new("photo2.png"));
+        r2.file_size_formatted = "4.5 MB".to_string();
+        r2.file_type_label = "PNG".to_string();
+        let mut s2 = MetadataSection::new("Camera");
+        s2.add("Model", "EOS R5");
+        r2.sections.push(s2);
+
+        let csv = generate_batch_csv(&[r1, r2]).expect("Batch CSV failed");
+        assert!(csv.contains("photo1.jpg"));
+        assert!(csv.contains("photo2.png"));
+        assert!(csv.contains("Camera: Model"));
+        assert!(csv.contains("Alpha 7"));
+        assert!(csv.contains("EOS R5"));
+    }
+}

@@ -160,3 +160,32 @@ impl FileMetadataReport {
         md
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_report_serialization() {
+        let mut report = FileMetadataReport::new(Path::new("/tmp/test_file.png"));
+        report.file_size_formatted = "1.5 MB".to_string();
+        report.file_type_label = "PNG Image".to_string();
+
+        let mut sec = MetadataSection::new("Image Properties");
+        sec.add("Dimensions", "1920 × 1080");
+        sec.add("Color Space", "sRGB");
+        report.sections.push(sec);
+
+        let csv = report.to_csv().expect("CSV generation failed");
+        assert!(csv.contains("Category,Property,Value,Description"));
+        assert!(csv.contains("Image Properties,Dimensions,1920 × 1080,"));
+        assert!(csv.contains("Image Properties,Color Space,sRGB,"));
+
+        let json = report.to_json().expect("JSON generation failed");
+        assert!(json.contains("test_file.png"));
+
+        let md = report.to_markdown();
+        assert!(md.contains("# Metadata Report: test_file.png"));
+        assert!(md.contains("| Dimensions | 1920 × 1080 |"));
+    }
+}
