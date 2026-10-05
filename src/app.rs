@@ -21,15 +21,20 @@ pub struct MtaApp {
     config: AppConfig,
     active_tab: AppTab,
     history: InspectionHistory,
+    history_search: String,
 
     // Single file inspector state
     current_report: Option<FileMetadataReport>,
     filter_query: String,
     selected_category: Option<String>,
 
-    // Batch inspector state
+    // Batch inspector state (async processing)
     batch_reports: Vec<FileMetadataReport>,
     is_batch_loading: bool,
+    batch_total_expected: usize,
+    batch_processed_count: usize,
+    batch_rx: Receiver<FileMetadataReport>,
+    batch_tx: Sender<FileMetadataReport>,
 
     // Status bar & notification
     status_line: String,
@@ -48,6 +53,7 @@ impl MtaApp {
         let config = AppConfig::load();
         let history = InspectionHistory::load();
         let (update_event_tx, update_event_rx) = mpsc::channel();
+        let (batch_tx, batch_rx) = mpsc::channel();
 
         // Spawn background update check
         spawn_update_check(update_event_tx.clone());
@@ -56,11 +62,16 @@ impl MtaApp {
             config,
             active_tab: AppTab::Inspector,
             history,
+            history_search: String::new(),
             current_report: None,
             filter_query: String::new(),
             selected_category: None,
             batch_reports: Vec::new(),
             is_batch_loading: false,
+            batch_total_expected: 0,
+            batch_processed_count: 0,
+            batch_rx,
+            batch_tx,
             status_line: "Ready".to_string(),
             update_status: UpdateStatus::Checking,
             update_event_rx,
@@ -100,23 +111,52 @@ impl MtaApp {
     }
 
     pub fn load_batch_files(&mut self, paths: &[PathBuf]) {
-        self.is_batch_loading = true;
-        let calculate_hashes = self.config.calculate_hashes;
-        let mut loaded = Vec::new();
-
-        for p in paths {
-            if p.is_file() {
-                if let Ok(rep) = inspect_file(p, calculate_hashes) {
-                    loaded.push(rep);
-                }
-            }
+        let valid_paths: Vec<PathBuf> = paths.iter().filter(|p| p.is_file()).cloned().collect();
+        if valid_paths.is_empty() {
+            return;
         }
 
-        let added_count = loaded.len();
-        self.batch_reports.extend(loaded);
-        self.is_batch_loading = false;
-        self.status_line = format!("Loaded {added_count} files into batch inspector");
+        self.is_batch_loading = true;
+        self.batch_total_expected += valid_paths.len();
+        self.status_line = format!(
+            "Inspecting batch: {}/{} files...",
+            self.batch_processed_count, self.batch_total_expected
+        );
         self.active_tab = AppTab::Batch;
+
+        let calculate_hashes = self.config.calculate_hashes;
+        let tx = self.batch_tx.clone();
+        std::thread::spawn(move || {
+            for p in valid_paths {
+                if let Ok(rep) = inspect_file(&p, calculate_hashes) {
+                    let _ = tx.send(rep);
+                }
+            }
+        });
+    }
+
+    fn apply_batch_events(&mut self) {
+        let mut received = 0;
+        while let Ok(rep) = self.batch_rx.try_recv() {
+            self.batch_reports.push(rep);
+            self.batch_processed_count += 1;
+            received += 1;
+        }
+
+        if received > 0 {
+            if self.batch_processed_count >= self.batch_total_expected {
+                self.is_batch_loading = false;
+                self.status_line = format!(
+                    "Batch inspection complete ({} files loaded)",
+                    self.batch_reports.len()
+                );
+            } else {
+                self.status_line = format!(
+                    "Inspecting batch: {}/{} files...",
+                    self.batch_processed_count, self.batch_total_expected
+                );
+            }
+        }
     }
 
     fn check_for_updates(&mut self) {
@@ -147,6 +187,47 @@ impl MtaApp {
         }
     }
 
+    fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
+        // Cmd/Ctrl + O: Open file
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::O)) {
+            if let Some(path) = rfd::FileDialog::new().pick_file() {
+                self.load_file(&path);
+            }
+        }
+        // Cmd/Ctrl + Shift + O: Open batch files
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::O)) {
+            if let Some(files) = rfd::FileDialog::new().pick_files() {
+                self.load_batch_files(&files);
+            }
+        }
+        // Cmd/Ctrl + W: Close current report
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::W)) {
+            if self.current_report.is_some() {
+                self.current_report = None;
+                self.status_line = "Closed report".to_string();
+            }
+        }
+        // Cmd/Ctrl + 1-4: Switch tabs
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Num1)) {
+            self.active_tab = AppTab::Inspector;
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Num2)) {
+            self.active_tab = AppTab::Batch;
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Num3)) {
+            self.active_tab = AppTab::History;
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Num4)) {
+            self.active_tab = AppTab::Settings;
+        }
+        // Escape: clear filter or search
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            if !self.filter_query.is_empty() {
+                self.filter_query.clear();
+            }
+            if !self.history_search.is_empty() {
+                self.history_search.clear();
+            }
+        }
+    }
+
     fn draw_drag_overlay(&self, ctx: &egui::Context) {
         let hovered = ctx.input(|i| !i.raw.hovered_files.is_empty());
         if hovered {
@@ -165,7 +246,7 @@ impl MtaApp {
                     painter.text(
                         center,
                         egui::Align2::CENTER_CENTER,
-                        "📥 Drop file to inspect metadata",
+                        "Drop files to inspect metadata",
                         egui::FontId::proportional(22.0),
                         egui::Color32::WHITE,
                     );
@@ -208,15 +289,15 @@ impl MtaApp {
     fn tabs_bar_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
-            ui.selectable_value(&mut self.active_tab, AppTab::Inspector, "🔍 Inspector");
-            ui.selectable_value(&mut self.active_tab, AppTab::Batch, "📚 Batch");
-            ui.selectable_value(&mut self.active_tab, AppTab::History, "⏱ History");
-            ui.selectable_value(&mut self.active_tab, AppTab::Settings, "⚙ Settings");
+            ui.selectable_value(&mut self.active_tab, AppTab::Inspector, "Inspector");
+            ui.selectable_value(&mut self.active_tab, AppTab::Batch, "Batch");
+            ui.selectable_value(&mut self.active_tab, AppTab::History, "History");
+            ui.selectable_value(&mut self.active_tab, AppTab::Settings, "Settings");
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 match &self.update_status {
                     UpdateStatus::Available { version, download_url, .. } => {
-                        let btn = egui::Button::new(format!("⭐ Update to v{version}"))
+                        let btn = egui::Button::new(format!("Update to v{version}"))
                             .fill(egui::Color32::from_rgb(30, 80, 255));
                         if ui.add(btn).clicked() {
                             let url = download_url.clone();
@@ -278,7 +359,7 @@ impl MtaApp {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
 
-                    if ui.button("Export CSV").on_hover_text("Save metadata as CSV file").clicked() {
+                    if ui.button("Export CSV").on_hover_text("Save metadata as CSV spreadsheet").clicked() {
                         match exporter::save_single_csv(report, &self.config.export_dir) {
                             Ok(Some(saved)) => {
                                 self.status_line = format!("Exported CSV to {saved}");
@@ -290,7 +371,7 @@ impl MtaApp {
                         }
                     }
 
-                    if ui.button("Copy CSV").on_hover_text("Copy table as CSV to clipboard").clicked() {
+                    if ui.button("Copy CSV").on_hover_text("Copy CSV table to clipboard").clicked() {
                         if let Ok(csv) = report.to_csv() {
                             if exporter::copy_to_clipboard(&csv).is_ok() {
                                 self.status_line = "Copied CSV to clipboard".to_string();
@@ -298,7 +379,7 @@ impl MtaApp {
                         }
                     }
 
-                    if ui.button("Export JSON").on_hover_text("Save metadata as JSON file").clicked() {
+                    if ui.button("Export JSON").on_hover_text("Save metadata as JSON document").clicked() {
                         match exporter::save_single_json(report, &self.config.export_dir) {
                             Ok(Some(saved)) => {
                                 self.status_line = format!("Exported JSON to {saved}");
@@ -310,7 +391,7 @@ impl MtaApp {
                         }
                     }
 
-                    if ui.button("Copy Summary").on_hover_text("Copy markdown summary to clipboard").clicked() {
+                    if ui.button("Copy Summary").on_hover_text("Copy Markdown summary to clipboard").clicked() {
                         let md = report.to_markdown();
                         if exporter::copy_to_clipboard(&md).is_ok() {
                             self.status_line = "Copied summary to clipboard".to_string();
@@ -328,18 +409,19 @@ impl MtaApp {
                         let _ = exporter::reveal_file_in_finder(&report.path);
                     }
 
-                    if ui.button("Open in App").on_hover_text("Open file with standard application").clicked() {
+                    if ui.button("Open File").on_hover_text("Open file with standard application").clicked() {
                         let _ = exporter::open_file_in_default_app(&report.path);
                     }
 
-                    if ui.button("Open Another...").clicked() {
+                    if ui.button("Open Another...").on_hover_text("Select another file to inspect (Cmd+O)").clicked() {
                         if let Some(p) = rfd::FileDialog::new().pick_file() {
                             self.load_file(&p);
                         }
                     }
 
-                    if ui.button("Close").clicked() {
+                    if ui.button("Close").on_hover_text("Close current report (Cmd+W)").clicked() {
                         self.current_report = None;
+                        self.status_line = "Closed report".to_string();
                     }
                 });
             });
@@ -349,22 +431,19 @@ impl MtaApp {
             // Filter & Search bar
             ui.horizontal_wrapped(|ui| {
                 ui.label("Filter:");
-                let text_edit = ui.add(
+                ui.add(
                     egui::TextEdit::singleline(&mut self.filter_query)
                         .hint_text("Search properties...")
                         .desired_width(160.0),
                 );
-                if text_edit.changed() {
-                    // Filter dynamically
-                }
-                if !self.filter_query.is_empty() && ui.small_button("✕").clicked() {
+                if !self.filter_query.is_empty() && ui.small_button("✕").on_hover_text("Clear filter (Esc)").clicked() {
                     self.filter_query.clear();
                 }
 
                 // Category chips
                 ui.separator();
                 let is_all = self.selected_category.is_none();
-                if ui.selectable_label(is_all, "All").clicked() {
+                if ui.selectable_label(is_all, format!("All ({})", report.total_entries_count())).clicked() {
                     self.selected_category = None;
                 }
 
@@ -386,6 +465,7 @@ impl MtaApp {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     let full_width = ui.available_width();
+                    let mut total_matches = 0;
 
                     for section in &report.sections {
                         if let Some(ref cat) = self.selected_category {
@@ -408,6 +488,8 @@ impl MtaApp {
                         if matching_entries.is_empty() {
                             continue;
                         }
+
+                        total_matches += matching_entries.len();
 
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
@@ -440,7 +522,7 @@ impl MtaApp {
                                     ui.horizontal(|ui| {
                                         // Column 1: Key
                                         ui.allocate_ui_with_layout(
-                                            egui::vec2(key_col_w, 0.0),
+                                             egui::vec2(key_col_w, 0.0),
                                             egui::Layout::left_to_right(egui::Align::Center),
                                             |ui| {
                                                 ui.add(
@@ -452,7 +534,7 @@ impl MtaApp {
                                             },
                                         );
 
-                                        // Column 2: Value
+                                        // Column 2: Value (selectable text)
                                         ui.allocate_ui_with_layout(
                                             egui::vec2(val_col_w, 0.0),
                                             egui::Layout::left_to_right(egui::Align::Center),
@@ -463,7 +545,7 @@ impl MtaApp {
                                                 if is_link {
                                                     ui.hyperlink(&entry.value);
                                                 } else {
-                                                    ui.add(egui::Label::new(&entry.value).wrap());
+                                                    ui.add(egui::Label::new(&entry.value).wrap().selectable(true));
                                                 }
                                             },
                                         );
@@ -491,6 +573,21 @@ impl MtaApp {
                         }
                     }
 
+                    if total_matches == 0 && (!filter.is_empty() || self.selected_category.is_some()) {
+                        ui.add_space(30.0);
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("No properties matching \"{}\"", self.filter_query))
+                                    .weak(),
+                            );
+                            ui.add_space(8.0);
+                            if ui.button("Clear Filter").clicked() {
+                                self.filter_query.clear();
+                                self.selected_category = None;
+                            }
+                        });
+                    }
+
                     // Ample bottom space so bottom-most item is never obscured
                     ui.add_space(36.0);
                 });
@@ -504,7 +601,13 @@ impl MtaApp {
                         .size(18.0)
                         .strong(),
                 );
-                ui.add_space(8.0);
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("or browse to inspect full metadata")
+                        .small()
+                        .weak(),
+                );
+                ui.add_space(10.0);
 
                 if ui.button(egui::RichText::new("Browse File...").size(14.0)).clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_file() {
@@ -512,7 +615,7 @@ impl MtaApp {
                     }
                 }
 
-                ui.add_space(8.0);
+                ui.add_space(10.0);
                 ui.label(
                     egui::RichText::new("Supports Images, PDFs, Documents, Audio, Video, Archives, Code, Fonts & more")
                         .small()
@@ -547,13 +650,13 @@ impl MtaApp {
 
     fn batch_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("➕ Add Files...").clicked() {
+            if ui.button("Add Files...").on_hover_text("Select multiple files to inspect (Cmd+Shift+O)").clicked() {
                 if let Some(files) = rfd::FileDialog::new().pick_files() {
                     self.load_batch_files(&files);
                 }
             }
 
-            if ui.button("📁 Add Folder...").clicked() {
+            if ui.button("Add Folder...").on_hover_text("Select an entire directory to inspect").clicked() {
                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                     if let Ok(entries) = std::fs::read_dir(folder) {
                         let files: Vec<PathBuf> = entries
@@ -567,12 +670,15 @@ impl MtaApp {
             }
 
             if !self.batch_reports.is_empty() {
-                if ui.button("🗑 Clear Batch").clicked() {
+                if ui.button("Clear All").on_hover_text("Clear current batch list").clicked() {
                     self.batch_reports.clear();
+                    self.batch_total_expected = 0;
+                    self.batch_processed_count = 0;
+                    self.is_batch_loading = false;
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("💾 Export Batch to CSV").clicked() {
+                    if ui.button("Export CSV").on_hover_text("Export entire batch as CSV spreadsheet").clicked() {
                         match exporter::save_batch_csv(&self.batch_reports, &self.config.export_dir) {
                             Ok(Some(path)) => {
                                 self.status_line = format!("Exported batch CSV to {path}");
@@ -584,7 +690,7 @@ impl MtaApp {
                         }
                     }
 
-                    if ui.button("📋 Copy Batch CSV").clicked() {
+                    if ui.button("Copy CSV").on_hover_text("Copy batch CSV table to clipboard").clicked() {
                         if let Ok(csv) = exporter::generate_batch_csv(&self.batch_reports) {
                             if exporter::copy_to_clipboard(&csv).is_ok() {
                                 self.status_line = "Copied batch CSV to clipboard".to_string();
@@ -600,21 +706,46 @@ impl MtaApp {
         if self.batch_reports.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space(60.0);
-                ui.label(egui::RichText::new("No batch files loaded.").heading());
-                ui.label("Drop multiple files or click 'Add Files' / 'Add Folder' to inspect them together.");
+                ui.label(egui::RichText::new("No batch files loaded").heading());
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Drop multiple files or click 'Add Files' / 'Add Folder' to inspect them together.")
+                        .weak(),
+                );
             });
         } else {
-            ui.label(format!("Loaded {} files in batch", self.batch_reports.len()));
+            let total_props: usize = self.batch_reports.iter().map(|r| r.total_entries_count()).sum();
+            ui.horizontal(|ui| {
+                if self.is_batch_loading {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Analyzing {} of {} files...",
+                            self.batch_processed_count, self.batch_total_expected
+                        ))
+                        .italics(),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} files in batch ({} total properties extracted)",
+                            self.batch_reports.len(),
+                            total_props
+                        ))
+                        .weak(),
+                    );
+                }
+            });
             ui.add_space(4.0);
 
             let mut inspect_idx = None;
+            let mut remove_idx = None;
 
             egui::ScrollArea::vertical()
                 .id_salt("batch_table_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     let full_width = ui.available_width();
-                    let action_w = 58.0;
+                    let action_w = 76.0;
                     let format_w = (full_width * 0.16).clamp(80.0, 130.0);
                     let size_w = (full_width * 0.14).clamp(70.0, 110.0);
                     let props_w = (full_width * 0.10).clamp(50.0, 80.0);
@@ -661,9 +792,15 @@ impl MtaApp {
                                 ui.set_width(full_width - 12.0);
                                 ui.horizontal(|ui| {
                                     ui.allocate_ui(egui::vec2(action_w, 0.0), |ui| {
-                                        if ui.small_button("View").clicked() {
-                                            inspect_idx = Some(idx);
-                                        }
+                                        ui.horizontal(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 4.0;
+                                            if ui.small_button("Inspect").clicked() {
+                                                inspect_idx = Some(idx);
+                                            }
+                                            if ui.small_button("✕").on_hover_text("Remove from batch").clicked() {
+                                                remove_idx = Some(idx);
+                                            }
+                                        });
                                     });
                                     ui.allocate_ui(egui::vec2(name_w, 0.0), |ui| {
                                         ui.add(egui::Label::new(&report.file_name).truncate())
@@ -685,6 +822,9 @@ impl MtaApp {
                     ui.add_space(36.0);
                 });
 
+            if let Some(idx) = remove_idx {
+                self.batch_reports.remove(idx);
+            }
             if let Some(idx) = inspect_idx {
                 self.current_report = Some(self.batch_reports[idx].clone());
                 self.active_tab = AppTab::Inspector;
@@ -695,16 +835,61 @@ impl MtaApp {
     fn history_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Inspection History");
+
+            ui.add_space(16.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.history_search)
+                    .hint_text("Search history...")
+                    .desired_width(180.0),
+            );
+            if !self.history_search.is_empty() && ui.small_button("✕").on_hover_text("Clear search (Esc)").clicked() {
+                self.history_search.clear();
+            }
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if !self.history.records.is_empty() && ui.button("🗑 Clear History").clicked() {
+                if !self.history.records.is_empty() && ui.button("Clear History").clicked() {
                     self.history.clear();
                 }
             });
         });
         ui.separator();
 
+        let search = self.history_search.to_lowercase();
+        let filtered_records: Vec<(usize, &crate::history::HistoryRecord)> = self
+            .history
+            .records
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                search.is_empty()
+                    || r.file_name.to_lowercase().contains(&search)
+                    || r.file_type_label.to_lowercase().contains(&search)
+                    || r.path.to_lowercase().contains(&search)
+            })
+            .collect();
+
         if self.history.records.is_empty() {
-            ui.label("No recent inspections.");
+            ui.vertical_centered(|ui| {
+                ui.add_space(60.0);
+                ui.label(egui::RichText::new("No inspection history yet").heading());
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Files you inspect will appear here for fast re-inspection.")
+                        .weak(),
+                );
+            });
+        } else if filtered_records.is_empty() {
+            ui.vertical_centered(|ui| {
+                ui.add_space(40.0);
+                ui.label(
+                    egui::RichText::new(format!("No history entries matching \"{}\"", self.history_search))
+                        .weak(),
+                );
+                ui.add_space(8.0);
+                if ui.button("Clear Search").clicked() {
+                    self.history_search.clear();
+                }
+            });
         } else {
             let mut file_to_load = None;
             let mut file_to_remove = None;
@@ -750,8 +935,9 @@ impl MtaApp {
                             });
                         });
 
-                    for (idx, rec) in self.history.records.iter().enumerate() {
-                        let row_bg = if idx % 2 == 0 {
+                    for (row_num, (_orig_idx, rec)) in filtered_records.iter().enumerate() {
+                        let exists = Path::new(&rec.path).exists();
+                        let row_bg = if row_num % 2 == 0 {
                             ui.visuals().faint_bg_color
                         } else {
                             egui::Color32::TRANSPARENT
@@ -767,7 +953,7 @@ impl MtaApp {
                                     ui.allocate_ui(egui::vec2(action_w, 0.0), |ui| {
                                         ui.horizontal(|ui| {
                                             ui.spacing_mut().item_spacing.x = 4.0;
-                                            if ui.small_button("Inspect").clicked() {
+                                            if ui.add_enabled(exists, egui::Button::new("Inspect")).clicked() {
                                                 file_to_load = Some(PathBuf::from(&rec.path));
                                             }
                                             if ui.small_button("🗑").on_hover_text("Remove from history").clicked() {
@@ -776,8 +962,17 @@ impl MtaApp {
                                         });
                                     });
                                     ui.allocate_ui(egui::vec2(name_w, 0.0), |ui| {
-                                        ui.add(egui::Label::new(&rec.file_name).truncate())
-                                            .on_hover_text(&rec.path);
+                                        let mut label = egui::RichText::new(&rec.file_name);
+                                        if !exists {
+                                            label = label.weak().strikethrough();
+                                        }
+                                        let tooltip = if exists {
+                                            rec.path.clone()
+                                        } else {
+                                            format!("{} (File no longer found on disk)", rec.path)
+                                        };
+                                        ui.add(egui::Label::new(label).truncate())
+                                            .on_hover_text(tooltip);
                                     });
                                     ui.allocate_ui(egui::vec2(format_w, 0.0), |ui| {
                                         ui.label(&rec.file_type_label);
@@ -832,6 +1027,12 @@ impl MtaApp {
             &mut self.config.calculate_hashes,
             "Compute cryptographic hashes (MD5, SHA-1, SHA-256) & Shannon entropy",
         );
+        ui.label(
+            egui::RichText::new("  (Automatically skipped for files > 100 MB to preserve instant responsiveness)")
+                .small()
+                .weak(),
+        );
+
         let prev_copy = self.config.auto_copy_csv_on_inspect;
         ui.checkbox(
             &mut self.config.auto_copy_csv_on_inspect,
@@ -843,9 +1044,31 @@ impl MtaApp {
         }
 
         ui.add_space(14.0);
-        ui.label(egui::RichText::new("Updates").strong());
+        ui.label(egui::RichText::new("Data & Storage").strong());
+        let data_dir = crate::config::config_dir();
         ui.horizontal(|ui| {
-            ui.label(format!("Installed version: v{}", env!("CARGO_PKG_VERSION")));
+            ui.label(
+                egui::RichText::new(format!("Storage directory: {}", data_dir.display()))
+                    .small()
+                    .weak(),
+            );
+
+            #[cfg(target_os = "macos")]
+            let reveal_dir_text = "Reveal in Finder";
+            #[cfg(target_os = "windows")]
+            let reveal_dir_text = "Show in Explorer";
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            let reveal_dir_text = "Show in File Manager";
+
+            if ui.small_button(reveal_dir_text).clicked() {
+                let _ = exporter::open_file_in_default_app(&data_dir);
+            }
+        });
+
+        ui.add_space(14.0);
+        ui.label(egui::RichText::new("Updates & About").strong());
+        ui.horizontal(|ui| {
+            ui.label(format!("Mta v{}", env!("CARGO_PKG_VERSION")));
             if ui.button("Check for Updates").clicked() {
                 self.check_for_updates();
             }
@@ -896,6 +1119,12 @@ impl MtaApp {
         if let Some(url) = update_to_run {
             self.perform_update(url);
         }
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Pure Rust • Zero C Dependencies • MIT License").small().weak());
+            ui.hyperlink_to("GitHub Repository", "https://github.com/salernoelia/mta");
+        });
     }
 }
 
@@ -910,8 +1139,18 @@ impl eframe::App for MtaApp {
             self.applied_theme = Some(self.config.theme);
         }
 
-        ctx.request_repaint_after(Duration::from_millis(100));
+        // Optimized reactive repaints: only request timer when processing background work
+        if self.is_batch_loading {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        } else if self.update_status == UpdateStatus::Downloading {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        } else if self.update_status == UpdateStatus::Checking {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+
         self.apply_update_events();
+        self.apply_batch_events();
+        self.handle_keyboard_shortcuts(ctx);
         self.handle_drag_and_drop(ctx);
         self.draw_drag_overlay(ctx);
 
