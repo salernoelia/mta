@@ -274,11 +274,11 @@ impl MtaApp {
                 ui.separator();
                 ui.add_space(2.0);
 
-                // Row 3: Action Buttons Toolbar (dedicated row)
+                // Row 3: Action Buttons Toolbar (dedicated row, no separators, clean text)
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
 
-                    if ui.button("💾 Export CSV").on_hover_text("Save metadata as CSV file").clicked() {
+                    if ui.button("Export CSV").on_hover_text("Save metadata as CSV file").clicked() {
                         match exporter::save_single_csv(report, &self.config.export_dir) {
                             Ok(Some(saved)) => {
                                 self.status_line = format!("Exported CSV to {saved}");
@@ -290,7 +290,7 @@ impl MtaApp {
                         }
                     }
 
-                    if ui.button("📋 Copy CSV").on_hover_text("Copy table as CSV to clipboard").clicked() {
+                    if ui.button("Copy CSV").on_hover_text("Copy table as CSV to clipboard").clicked() {
                         if let Ok(csv) = report.to_csv() {
                             if exporter::copy_to_clipboard(&csv).is_ok() {
                                 self.status_line = "Copied CSV to clipboard".to_string();
@@ -298,7 +298,7 @@ impl MtaApp {
                         }
                     }
 
-                    if ui.button("💾 Export JSON").on_hover_text("Save metadata as JSON file").clicked() {
+                    if ui.button("Export JSON").on_hover_text("Save metadata as JSON file").clicked() {
                         match exporter::save_single_json(report, &self.config.export_dir) {
                             Ok(Some(saved)) => {
                                 self.status_line = format!("Exported JSON to {saved}");
@@ -310,39 +310,35 @@ impl MtaApp {
                         }
                     }
 
-                    if ui.button("📋 Copy Summary").on_hover_text("Copy markdown summary to clipboard").clicked() {
+                    if ui.button("Copy Summary").on_hover_text("Copy markdown summary to clipboard").clicked() {
                         let md = report.to_markdown();
                         if exporter::copy_to_clipboard(&md).is_ok() {
                             self.status_line = "Copied summary to clipboard".to_string();
                         }
                     }
 
-                    ui.separator();
-
                     #[cfg(target_os = "macos")]
-                    let reveal_btn_text = "📁 Reveal in Finder";
+                    let reveal_btn_text = "Reveal in Finder";
                     #[cfg(target_os = "windows")]
-                    let reveal_btn_text = "📁 Show in Explorer";
+                    let reveal_btn_text = "Show in Explorer";
                     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                    let reveal_btn_text = "📁 Show in File Manager";
+                    let reveal_btn_text = "Show in File Manager";
 
                     if ui.button(reveal_btn_text).on_hover_text("Reveal and select file in system file manager").clicked() {
                         let _ = exporter::reveal_file_in_finder(&report.path);
                     }
 
-                    if ui.button("↗ Open in App").on_hover_text("Open file with standard application").clicked() {
+                    if ui.button("Open in App").on_hover_text("Open file with standard application").clicked() {
                         let _ = exporter::open_file_in_default_app(&report.path);
                     }
 
-                    ui.separator();
-
-                    if ui.button("📂 Open Another...").clicked() {
+                    if ui.button("Open Another...").clicked() {
                         if let Some(p) = rfd::FileDialog::new().pick_file() {
                             self.load_file(&p);
                         }
                     }
 
-                    if ui.button("✕ Close").clicked() {
+                    if ui.button("Close").clicked() {
                         self.current_report = None;
                     }
                 });
@@ -613,38 +609,79 @@ impl MtaApp {
 
             let mut inspect_idx = None;
 
-            egui::ScrollArea::both()
+            egui::ScrollArea::vertical()
                 .id_salt("batch_table_scroll")
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    egui::Grid::new("batch_grid")
-                        .striped(true)
-                        .spacing([18.0, 8.0])
-                        .show(ui, |ui| {
-                            // Header
-                            ui.label(egui::RichText::new("Action").strong());
-                            ui.label(egui::RichText::new("File Name").strong());
-                            ui.label(egui::RichText::new("Format").strong());
-                            ui.label(egui::RichText::new("Size").strong());
-                            ui.label(egui::RichText::new("Properties").strong());
-                            ui.label(egui::RichText::new("Path").strong());
-                            ui.end_row();
+                    let full_width = ui.available_width();
+                    let action_w = 58.0;
+                    let format_w = (full_width * 0.16).clamp(80.0, 130.0);
+                    let size_w = (full_width * 0.14).clamp(70.0, 110.0);
+                    let props_w = (full_width * 0.10).clamp(50.0, 80.0);
+                    let name_w = (full_width - action_w - format_w - size_w - props_w - 40.0).max(100.0);
 
-                            for (idx, report) in self.batch_reports.iter().enumerate() {
-                                if ui.small_button("🔍 View").clicked() {
-                                    inspect_idx = Some(idx);
-                                }
-                                ui.label(&report.file_name);
-                                ui.label(&report.file_type_label);
-                                ui.label(&report.file_size_formatted);
-                                ui.label(report.total_entries_count().to_string());
-                                ui.label(
-                                    egui::RichText::new(report.path.display().to_string())
-                                        .small()
-                                        .weak(),
-                                );
-                                ui.end_row();
-                            }
+                    // Header
+                    egui::Frame::NONE
+                        .fill(ui.visuals().faint_bg_color)
+                        .inner_margin(egui::Margin::symmetric(6, 6))
+                        .corner_radius(4.0)
+                        .show(ui, |ui| {
+                            ui.set_width(full_width - 12.0);
+                            ui.horizontal(|ui| {
+                                ui.allocate_ui(egui::vec2(action_w, 0.0), |ui| {
+                                    ui.label(egui::RichText::new("Action").strong());
+                                });
+                                ui.allocate_ui(egui::vec2(name_w, 0.0), |ui| {
+                                    ui.label(egui::RichText::new("File Name").strong());
+                                });
+                                ui.allocate_ui(egui::vec2(format_w, 0.0), |ui| {
+                                    ui.label(egui::RichText::new("Format").strong());
+                                });
+                                ui.allocate_ui(egui::vec2(size_w, 0.0), |ui| {
+                                    ui.label(egui::RichText::new("Size").strong());
+                                });
+                                ui.allocate_ui(egui::vec2(props_w, 0.0), |ui| {
+                                    ui.label(egui::RichText::new("Properties").strong());
+                                });
+                            });
                         });
+
+                    for (idx, report) in self.batch_reports.iter().enumerate() {
+                        let row_bg = if idx % 2 == 0 {
+                            ui.visuals().faint_bg_color
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+
+                        egui::Frame::NONE
+                            .fill(row_bg)
+                            .inner_margin(egui::Margin::symmetric(6, 5))
+                            .corner_radius(4.0)
+                            .show(ui, |ui| {
+                                ui.set_width(full_width - 12.0);
+                                ui.horizontal(|ui| {
+                                    ui.allocate_ui(egui::vec2(action_w, 0.0), |ui| {
+                                        if ui.small_button("View").clicked() {
+                                            inspect_idx = Some(idx);
+                                        }
+                                    });
+                                    ui.allocate_ui(egui::vec2(name_w, 0.0), |ui| {
+                                        ui.add(egui::Label::new(&report.file_name).truncate())
+                                            .on_hover_text(report.path.display().to_string());
+                                    });
+                                    ui.allocate_ui(egui::vec2(format_w, 0.0), |ui| {
+                                        ui.label(&report.file_type_label);
+                                    });
+                                    ui.allocate_ui(egui::vec2(size_w, 0.0), |ui| {
+                                        ui.label(&report.file_size_formatted);
+                                    });
+                                    ui.allocate_ui(egui::vec2(props_w, 0.0), |ui| {
+                                        ui.label(report.total_entries_count().to_string());
+                                    });
+                                });
+                            });
+                    }
+
                     ui.add_space(36.0);
                 });
 
@@ -674,36 +711,90 @@ impl MtaApp {
 
             egui::ScrollArea::vertical()
                 .id_salt("history_scroll")
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    egui::Grid::new("history_grid")
-                        .striped(true)
-                        .spacing([18.0, 8.0])
-                        .show(ui, |ui| {
-                            ui.label(egui::RichText::new("Action").strong());
-                            ui.label(egui::RichText::new("File Name").strong());
-                            ui.label(egui::RichText::new("Format").strong());
-                            ui.label(egui::RichText::new("Size").strong());
-                            ui.label(egui::RichText::new("Properties").strong());
-                            ui.label(egui::RichText::new("Time").strong());
-                            ui.end_row();
+                    let full_width = ui.available_width();
+                    let action_w = 78.0;
+                    let format_w = (full_width * 0.16).clamp(80.0, 130.0);
+                    let size_w = (full_width * 0.14).clamp(70.0, 110.0);
+                    let props_w = (full_width * 0.10).clamp(50.0, 80.0);
+                    let time_w = (full_width * 0.20).clamp(110.0, 160.0);
+                    let name_w = (full_width - action_w - format_w - size_w - props_w - time_w - 40.0).max(100.0);
 
-                            for rec in &self.history.records {
-                                ui.horizontal(|ui| {
-                                    if ui.small_button("Inspect").clicked() {
-                                        file_to_load = Some(PathBuf::from(&rec.path));
-                                    }
-                                    if ui.small_button("🗑").on_hover_text("Remove from history").clicked() {
-                                        file_to_remove = Some(rec.path.clone());
-                                    }
+                    // Header
+                    egui::Frame::NONE
+                        .fill(ui.visuals().faint_bg_color)
+                        .inner_margin(egui::Margin::symmetric(6, 6))
+                        .corner_radius(4.0)
+                        .show(ui, |ui| {
+                            ui.set_width(full_width - 12.0);
+                            ui.horizontal(|ui| {
+                                ui.allocate_ui(egui::vec2(action_w, 0.0), |ui| {
+                                    ui.label(egui::RichText::new("Action").strong());
                                 });
-                                ui.label(&rec.file_name);
-                                ui.label(&rec.file_type_label);
-                                ui.label(&rec.file_size_formatted);
-                                ui.label(rec.properties_count.to_string());
-                                ui.label(&rec.timestamp);
-                                ui.end_row();
-                            }
+                                ui.allocate_ui(egui::vec2(name_w, 0.0), |ui| {
+                                    ui.label(egui::RichText::new("File Name").strong());
+                                });
+                                ui.allocate_ui(egui::vec2(format_w, 0.0), |ui| {
+                                    ui.label(egui::RichText::new("Format").strong());
+                                });
+                                ui.allocate_ui(egui::vec2(size_w, 0.0), |ui| {
+                                    ui.label(egui::RichText::new("Size").strong());
+                                });
+                                ui.allocate_ui(egui::vec2(props_w, 0.0), |ui| {
+                                    ui.label(egui::RichText::new("Props").strong());
+                                });
+                                ui.allocate_ui(egui::vec2(time_w, 0.0), |ui| {
+                                    ui.label(egui::RichText::new("Time").strong());
+                                });
+                            });
                         });
+
+                    for (idx, rec) in self.history.records.iter().enumerate() {
+                        let row_bg = if idx % 2 == 0 {
+                            ui.visuals().faint_bg_color
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+
+                        egui::Frame::NONE
+                            .fill(row_bg)
+                            .inner_margin(egui::Margin::symmetric(6, 5))
+                            .corner_radius(4.0)
+                            .show(ui, |ui| {
+                                ui.set_width(full_width - 12.0);
+                                ui.horizontal(|ui| {
+                                    ui.allocate_ui(egui::vec2(action_w, 0.0), |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 4.0;
+                                            if ui.small_button("Inspect").clicked() {
+                                                file_to_load = Some(PathBuf::from(&rec.path));
+                                            }
+                                            if ui.small_button("🗑").on_hover_text("Remove from history").clicked() {
+                                                file_to_remove = Some(rec.path.clone());
+                                            }
+                                        });
+                                    });
+                                    ui.allocate_ui(egui::vec2(name_w, 0.0), |ui| {
+                                        ui.add(egui::Label::new(&rec.file_name).truncate())
+                                            .on_hover_text(&rec.path);
+                                    });
+                                    ui.allocate_ui(egui::vec2(format_w, 0.0), |ui| {
+                                        ui.label(&rec.file_type_label);
+                                    });
+                                    ui.allocate_ui(egui::vec2(size_w, 0.0), |ui| {
+                                        ui.label(&rec.file_size_formatted);
+                                    });
+                                    ui.allocate_ui(egui::vec2(props_w, 0.0), |ui| {
+                                        ui.label(rec.properties_count.to_string());
+                                    });
+                                    ui.allocate_ui(egui::vec2(time_w, 0.0), |ui| {
+                                        ui.label(egui::RichText::new(&rec.timestamp).small().weak());
+                                    });
+                                });
+                            });
+                    }
+
                     ui.add_space(36.0);
                 });
 
