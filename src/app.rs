@@ -246,75 +246,88 @@ impl MtaApp {
         if let Some(ref report) = self.current_report.clone() {
             // Header Card
             ui.group(|ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.heading(&report.file_name);
-                            let badge = egui::RichText::new(format!(" {} ", report.file_type_label))
-                                .background_color(egui::Color32::from_rgb(30, 80, 220))
-                                .color(egui::Color32::WHITE)
-                                .strong();
-                            ui.label(badge);
-                            ui.label(egui::RichText::new(&report.file_size_formatted).weak());
-                        });
-                        ui.label(
-                            egui::RichText::new(report.path.display().to_string())
-                                .small()
-                                .weak(),
-                        );
-                    });
+                ui.set_width(ui.available_width());
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("✕ Close").clicked() {
-                            self.current_report = None;
-                            return;
-                        }
+                // Row 1: File name & badges
+                ui.horizontal_wrapped(|ui| {
+                    ui.heading(
+                        egui::RichText::new(&report.file_name)
+                            .strong(),
+                    );
+                    let badge = egui::RichText::new(format!(" {} ", report.file_type_label))
+                        .background_color(egui::Color32::from_rgb(30, 80, 220))
+                        .color(egui::Color32::WHITE)
+                        .strong();
+                    ui.label(badge);
+                    ui.label(egui::RichText::new(&report.file_size_formatted).weak());
+                });
 
-                        if ui.button("📂 Open Another...").clicked() {
-                            if let Some(p) = rfd::FileDialog::new().pick_file() {
-                                self.load_file(&p);
+                // Row 2: Full Path
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(report.path.display().to_string())
+                        .small()
+                        .weak(),
+                );
+
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(2.0);
+
+                // Row 3: Action Buttons Toolbar (dedicated row)
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+
+                    if ui.button("💾 Export CSV").on_hover_text("Save metadata as CSV file").clicked() {
+                        match exporter::save_single_csv(report, &self.config.export_dir) {
+                            Ok(Some(saved)) => {
+                                self.status_line = format!("Exported CSV to {saved}");
+                            }
+                            Ok(None) => {}
+                            Err(err) => {
+                                self.status_line = format!("Export error: {err}");
                             }
                         }
+                    }
 
-                        if ui.button("📋 Copy All").on_hover_text("Copy markdown summary to clipboard").clicked() {
-                            let md = report.to_markdown();
-                            if exporter::copy_to_clipboard(&md).is_ok() {
-                                self.status_line = "Copied summary to clipboard".to_string();
+                    if ui.button("📋 Copy CSV").on_hover_text("Copy table as CSV to clipboard").clicked() {
+                        if let Ok(csv) = report.to_csv() {
+                            if exporter::copy_to_clipboard(&csv).is_ok() {
+                                self.status_line = "Copied CSV to clipboard".to_string();
                             }
                         }
+                    }
 
-                        if ui.button("📋 Copy CSV").on_hover_text("Copy table as CSV to clipboard").clicked() {
-                            if let Ok(csv) = report.to_csv() {
-                                if exporter::copy_to_clipboard(&csv).is_ok() {
-                                    self.status_line = "Copied CSV to clipboard".to_string();
-                                }
+                    if ui.button("💾 Export JSON").on_hover_text("Save metadata as JSON file").clicked() {
+                        match exporter::save_single_json(report, &self.config.export_dir) {
+                            Ok(Some(saved)) => {
+                                self.status_line = format!("Exported JSON to {saved}");
+                            }
+                            Ok(None) => {}
+                            Err(err) => {
+                                self.status_line = format!("Export error: {err}");
                             }
                         }
+                    }
 
-                        if ui.button("💾 Export CSV").on_hover_text("Save metadata as CSV file").clicked() {
-                            match exporter::save_single_csv(report, &self.config.export_dir) {
-                                Ok(Some(saved)) => {
-                                    self.status_line = format!("Exported CSV to {saved}");
-                                }
-                                Ok(None) => {}
-                                Err(err) => {
-                                    self.status_line = format!("Export error: {err}");
-                                }
-                            }
+                    if ui.button("📋 Copy Summary").on_hover_text("Copy markdown summary to clipboard").clicked() {
+                        let md = report.to_markdown();
+                        if exporter::copy_to_clipboard(&md).is_ok() {
+                            self.status_line = "Copied summary to clipboard".to_string();
                         }
+                    }
 
-                        if ui.button("💾 Export JSON").on_hover_text("Save metadata as JSON file").clicked() {
-                            match exporter::save_single_json(report, &self.config.export_dir) {
-                                Ok(Some(saved)) => {
-                                    self.status_line = format!("Exported JSON to {saved}");
-                                }
-                                Ok(None) => {}
-                                Err(err) => {
-                                    self.status_line = format!("Export error: {err}");
-                                }
-                            }
+                    ui.separator();
+
+                    if ui.button("📂 Open Another...").clicked() {
+                        if let Some(p) = rfd::FileDialog::new().pick_file() {
+                            self.load_file(&p);
                         }
-                    });
+                    }
+
+                    if ui.button("✕ Close").clicked() {
+                        self.current_report = None;
+                    }
                 });
             });
 
@@ -351,7 +364,7 @@ impl MtaApp {
 
             // Metadata Table
             let filter = self.filter_query.to_lowercase();
-            egui::ScrollArea::vertical()
+            egui::ScrollArea::both()
                 .id_salt("metadata_table_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -423,6 +436,9 @@ impl MtaApp {
                                 }
                             });
                     }
+
+                    // Ample bottom space so horizontal scrollbar never overlaps bottom-most row
+                    ui.add_space(36.0);
                 });
         } else {
             // Empty State: Drop zone
@@ -593,6 +609,7 @@ impl MtaApp {
                                 ui.end_row();
                             }
                         });
+                    ui.add_space(36.0);
                 });
 
             if let Some(idx) = inspect_idx {
@@ -651,6 +668,7 @@ impl MtaApp {
                                 ui.end_row();
                             }
                         });
+                    ui.add_space(36.0);
                 });
 
             if let Some(path) = file_to_load {
