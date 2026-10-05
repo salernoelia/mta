@@ -85,8 +85,8 @@ fn main() {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Mta")
-        .with_inner_size([840.0, 640.0])
-        .with_min_inner_size([540.0, 380.0]);
+        .with_inner_size([640.0, 480.0])
+        .with_min_inner_size([440.0, 300.0]);
 
     if let Some(icon) = load_app_icon() {
         viewport = viewport.with_icon(icon);

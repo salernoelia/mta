@@ -319,6 +319,23 @@ impl MtaApp {
 
                     ui.separator();
 
+                    #[cfg(target_os = "macos")]
+                    let reveal_btn_text = "📁 Reveal in Finder";
+                    #[cfg(target_os = "windows")]
+                    let reveal_btn_text = "📁 Show in Explorer";
+                    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                    let reveal_btn_text = "📁 Show in File Manager";
+
+                    if ui.button(reveal_btn_text).on_hover_text("Reveal and select file in system file manager").clicked() {
+                        let _ = exporter::reveal_file_in_finder(&report.path);
+                    }
+
+                    if ui.button("↗ Open in App").on_hover_text("Open file with standard application").clicked() {
+                        let _ = exporter::open_file_in_default_app(&report.path);
+                    }
+
+                    ui.separator();
+
                     if ui.button("📂 Open Another...").clicked() {
                         if let Some(p) = rfd::FileDialog::new().pick_file() {
                             self.load_file(&p);
@@ -482,53 +499,31 @@ impl MtaApp {
                     ui.add_space(36.0);
                 });
         } else {
-            // Empty State: Drop zone
+            // Empty State: Minimalist text only
             ui.vertical_centered(|ui| {
-                ui.add_space(40.0);
+                ui.add_space(50.0);
 
-                let drop_rect_size = egui::vec2(480.0, 240.0);
-                let (rect, _response) = ui.allocate_exact_size(drop_rect_size, egui::Sense::hover());
-
-                let painter = ui.painter();
-                painter.rect_stroke(
-                    rect,
-                    12.0,
-                    egui::Stroke::new(2.0, egui::Color32::from_rgb(30, 80, 220)),
-                    egui::StrokeKind::Middle,
+                ui.label(
+                    egui::RichText::new("Drag & drop any file here")
+                        .size(18.0)
+                        .strong(),
                 );
+                ui.add_space(8.0);
 
-                painter.rect_filled(
-                    rect,
-                    12.0,
-                    egui::Color32::from_rgba_unmultiplied(30, 80, 220, 18),
-                );
-
-                let center = rect.center();
-                painter.text(
-                    center - egui::vec2(0.0, 36.0),
-                    egui::Align2::CENTER_CENTER,
-                    "📂 Drag & Drop Any File Here",
-                    egui::FontId::proportional(22.0),
-                    egui::Color32::WHITE,
-                );
-
-                painter.text(
-                    center - egui::vec2(0.0, 4.0),
-                    egui::Align2::CENTER_CENTER,
-                    "Images, PDFs, Documents, Audio, Video, Archives, Code, Fonts & more",
-                    egui::FontId::proportional(13.0),
-                    egui::Color32::from_gray(180),
-                );
-
-                ui.add_space(20.0);
-
-                if ui.button(egui::RichText::new("Browse File...").size(16.0)).clicked() {
+                if ui.button(egui::RichText::new("Browse File...").size(14.0)).clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_file() {
                         self.load_file(&path);
                     }
                 }
 
-                ui.add_space(30.0);
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new("Supports Images, PDFs, Documents, Audio, Video, Archives, Code, Fonts & more")
+                        .small()
+                        .weak(),
+                );
+
+                ui.add_space(24.0);
 
                 // Quick Recent Files
                 if !self.history.records.is_empty() {

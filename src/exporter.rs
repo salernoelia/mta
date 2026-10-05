@@ -8,6 +8,70 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
     clipboard.set_text(text).map_err(|e| e.to_string())
 }
 
+/// Reveal a file in the system file manager (Finder / Explorer) and select it.
+pub fn reveal_file_in_finder(path: &Path) -> Result<(), String> {
+    let path_str = path.to_string_lossy();
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path_str])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args([format!("/select,{}", path_str)])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(parent) = path.parent() {
+            std::process::Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Open a file with its default system handler application.
+pub fn open_file_in_default_app(path: &Path) -> Result<(), String> {
+    let path_str = path.to_string_lossy();
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&*path_str)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &path_str])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&*path_str)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
 pub fn save_single_csv(report: &FileMetadataReport, default_dir: &str) -> Result<Option<String>, String> {
     let default_name = format!("{}_metadata.csv", sanitize_filename(&report.file_name));
     let mut dialog = rfd::FileDialog::new()
