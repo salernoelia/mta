@@ -15,73 +15,91 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     // CLI Quick Output Modes
-    if args.len() >= 3 {
-        let flag = &args[1];
-        let path = PathBuf::from(&args[2]);
+    let mut format = None;
+    let mut target_path: Option<PathBuf> = None;
 
-        match flag.as_str() {
-            "--csv" => {
-                match metadata::inspect_file(&path, true) {
-                    Ok(rep) => match rep.to_csv() {
-                        Ok(csv) => {
-                            print!("{csv}");
-                            return;
-                        }
-                        Err(e) => {
-                            eprintln!("Error generating CSV: {e}");
-                            std::process::exit(1);
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!("Error inspecting file: {e}");
-                        std::process::exit(1);
-                    }
+    for arg in args.iter().skip(1) {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                println!("Mta - Pure Rust universal metadata inspector");
+                println!();
+                println!("USAGE:");
+                println!("    mta [OPTIONS] [FILE]");
+                println!();
+                println!("OPTIONS:");
+                println!("    --json             Output metadata as formatted JSON");
+                println!("    --csv              Output metadata as CSV table");
+                println!("    --md, --markdown   Output metadata as Markdown");
+                println!("    -h, --help         Print help information");
+                println!("    -V, --version      Print version information");
+                println!();
+                println!("If no export option is specified, Mta opens in GUI mode.");
+                return;
+            }
+            "-V" | "--version" => {
+                println!("Mta v{}", env!("CARGO_PKG_VERSION"));
+                return;
+            }
+            "--json" => format = Some("json"),
+            "--csv" => format = Some("csv"),
+            "--md" | "--markdown" => format = Some("md"),
+            other => {
+                if !other.starts_with('-') && target_path.is_none() {
+                    target_path = Some(PathBuf::from(other));
                 }
             }
-            "--json" => {
-                match metadata::inspect_file(&path, true) {
-                    Ok(rep) => match rep.to_json() {
-                        Ok(json) => {
-                            println!("{json}");
-                            return;
-                        }
-                        Err(e) => {
-                            eprintln!("Error generating JSON: {e}");
-                            std::process::exit(1);
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!("Error inspecting file: {e}");
-                        std::process::exit(1);
-                    }
-                }
-            }
-            "--md" | "--markdown" => {
-                match metadata::inspect_file(&path, true) {
-                    Ok(rep) => {
-                        println!("{}", rep.to_markdown());
+        }
+    }
+
+    if let (Some(fmt), Some(path)) = (format, &target_path) {
+        match fmt {
+            "csv" => match metadata::inspect_file(path, true) {
+                Ok(rep) => match rep.to_csv() {
+                    Ok(csv) => {
+                        print!("{csv}");
                         return;
                     }
                     Err(e) => {
-                        eprintln!("Error inspecting file: {e}");
+                        eprintln!("Error generating CSV: {e}");
                         std::process::exit(1);
                     }
+                },
+                Err(e) => {
+                    eprintln!("Error inspecting file: {e}");
+                    std::process::exit(1);
                 }
-            }
+            },
+            "json" => match metadata::inspect_file(path, true) {
+                Ok(rep) => match rep.to_json() {
+                    Ok(json) => {
+                        println!("{json}");
+                        return;
+                    }
+                    Err(e) => {
+                        eprintln!("Error generating JSON: {e}");
+                        std::process::exit(1);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Error inspecting file: {e}");
+                    std::process::exit(1);
+                }
+            },
+            "md" => match metadata::inspect_file(path, true) {
+                Ok(rep) => {
+                    println!("{}", rep.to_markdown());
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("Error inspecting file: {e}");
+                    std::process::exit(1);
+                }
+            },
             _ => {}
         }
     }
 
-    let initial_file = if args.len() >= 2 && !args[1].starts_with('-') {
-        let p = PathBuf::from(&args[1]);
-        if p.exists() {
-            Some(p)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let initial_file = target_path.filter(|p| p.exists());
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Mta")
